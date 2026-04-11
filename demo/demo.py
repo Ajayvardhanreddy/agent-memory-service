@@ -54,6 +54,19 @@ def show(label: str, data: dict):
             print(f"      [{m['role']:9}] {preview}")
 
 
+def check_ok(r: httpx.Response, label: str) -> dict:
+    """Assert HTTP 200 and return parsed JSON, printing error detail on failure."""
+    if r.status_code != 200:
+        print(f"\n  ERROR in {label}: HTTP {r.status_code}")
+        try:
+            body = r.json()
+            print(f"  {body.get('error', 'unknown')}: {body.get('detail', r.text)}")
+        except Exception:
+            print(f"  Raw response: {r.text[:300]}")
+        sys.exit(1)
+    return r.json()
+
+
 def docker_stop(container_suffix: str):
     name = f"{KV_CONTAINER_PREFIX}-{container_suffix}-1"
     result = subprocess.run(["docker", "stop", name], capture_output=True, text=True)
@@ -98,7 +111,7 @@ async def main():
             f"{MEMORY_URL}/memory/{AGENT_ID}/{SESSION_ID}/append",
             json={"role": "user", "content": "My order #4521 hasn't arrived yet."},
         )
-        session = r.json()
+        session = check_ok(r, "append message 1")
         show("After message 1 (user)", session)
         assert session["version"] == 1, f"Expected version 1, got {session['version']}"
 
@@ -106,7 +119,7 @@ async def main():
             f"{MEMORY_URL}/memory/{AGENT_ID}/{SESSION_ID}/append",
             json={"role": "assistant", "content": "I can help with order #4521. Let me check the status for you."},
         )
-        session = r.json()
+        session = check_ok(r, "append message 2")
         show("After message 2 (assistant)", session)
         assert session["version"] == 2
 
@@ -114,7 +127,7 @@ async def main():
             f"{MEMORY_URL}/memory/{AGENT_ID}/{SESSION_ID}/append",
             json={"role": "user", "content": "Also, my account email address needs to be updated."},
         )
-        session = r.json()
+        session = check_ok(r, "append message 3")
         show("After message 3 (user)", session)
         assert session["version"] == 3
         print(f"\n  Version is now {session['version']}. Three messages, three increments. Consistent.")
@@ -122,7 +135,7 @@ async def main():
         # ── SCENE 2: sliding window ──────────────────────────────────────
         banner(2, "Sliding window — last 2 messages only")
         r = await client.get(f"{MEMORY_URL}/memory/{AGENT_ID}/{SESSION_ID}/window?last_n=2")
-        window = r.json()
+        window = check_ok(r, "get window")
         print(f"  total_messages : {window['total_messages']}")
         print(f"  window_size    : {window['window_size']}")
         print(f"  messages returned:")
@@ -134,10 +147,11 @@ async def main():
         banner(3, "KILLING node-0 — replica fallback transparent to memory service")
         print(f"  Stopping node-0...")
         docker_stop("node-0")
-        time.sleep(2)
+        print(f"  Waiting 6s for heartbeat failure detection and leader promotion...")
+        time.sleep(6)
 
         r = await client.get(f"{MEMORY_URL}/memory/{AGENT_ID}/{SESSION_ID}")
-        session = r.json()
+        session = check_ok(r, "get session with node-0 down")
         show("GET session with node-0 DOWN", session)
         assert session["version"] == 3, f"Version changed unexpectedly: {session['version']}"
         print(f"\n  node-0 is dead. Memory still returns version {session['version']}. Replica served it.")
@@ -148,7 +162,7 @@ async def main():
             f"{MEMORY_URL}/memory/{AGENT_ID}/{SESSION_ID}/append",
             json={"role": "assistant", "content": "I've updated your email and am tracking order #4521."},
         )
-        session = r.json()
+        session = check_ok(r, "append message 4 with node-0 down")
         show("After message 4 — node-0 still down", session)
         assert session["version"] == 4
         print(f"\n  Write succeeded. Version {session['version']}. node-1 promoted to leader silently.")
