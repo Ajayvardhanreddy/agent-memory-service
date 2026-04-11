@@ -104,6 +104,14 @@ async def main():
             print(f"  Make sure KV cluster and memory service are running.")
             sys.exit(1)
 
+        # ── CLEANUP: delete session from any previous run ───────────────
+        print(f"\n  Cleaning up any previous session for {AGENT_ID}/{SESSION_ID}...")
+        r = await client.delete(f"{MEMORY_URL}/memory/{AGENT_ID}/{SESSION_ID}")
+        if r.status_code == 200:
+            print(f"  Previous session deleted — starting fresh.")
+        else:
+            print(f"  No previous session found — clean slate.")
+
         # ── SCENE 1: start conversation ──────────────────────────────────
         banner(1, "Starting a conversation — version counter begins at 1")
 
