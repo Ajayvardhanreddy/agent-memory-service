@@ -65,6 +65,20 @@ class StreamResponse(BaseModel):
     total: int
 
 
+class SessionSummary(BaseModel):
+    session_id: str
+    message_count: int
+    created_at: int
+    updated_at: int
+    version: int
+
+
+class SessionListResponse(BaseModel):
+    agent_id: str
+    sessions: list[SessionSummary]
+    total: int
+
+
 class ErrorResponse(BaseModel):
     error: str
     detail: str
@@ -170,6 +184,18 @@ async def append_message(
     return result
 
 
+@app.get("/memory/{agent_id}/sessions", response_model=SessionListResponse)
+async def list_sessions(agent_id: str, request: Request):
+    """
+    List all sessions for an agent with summary metadata.
+    Uses the KV-stored session index (index:{agent_id}).
+    Only includes sessions created after this endpoint was first deployed.
+    """
+    memory: MemoryService = request.app.state.memory
+    summaries = await memory.list_sessions(agent_id)
+    return {"agent_id": agent_id, "sessions": summaries, "total": len(summaries)}
+
+
 @app.get("/memory/{agent_id}/{session_id}", response_model=SessionResponse)
 async def get_session(agent_id: str, session_id: str, request: Request):
     """
@@ -260,6 +286,7 @@ async def root():
         "description": "Session memory and activity stream for AI agents",
         "endpoints": {
             "POST /memory/{agent_id}/{session_id}/append": "Append a message to a session",
+            "GET /memory/{agent_id}/sessions": "List all sessions for an agent",
             "GET /memory/{agent_id}/{session_id}": "Get full session",
             "GET /memory/{agent_id}/{session_id}/window?last_n=10": "Get last N messages",
             "DELETE /memory/{agent_id}/{session_id}": "Delete a session",

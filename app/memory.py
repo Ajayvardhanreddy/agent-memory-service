@@ -25,6 +25,7 @@ class MemoryService:
     Session memory for AI agents. Backed by the distributed KV store.
 
     Key format:  "mem:{agent_id}:{session_id}"
+    Index key:   "index:{agent_id}"  — holds list of session_id strings for that agent
 
     Value schema:
     {
@@ -41,11 +42,11 @@ class MemoryService:
         writes updated session, checks returned version == N+1.
         If not, another writer raced us — retry up to MAX_RETRIES times.
 
-    Limitations (documented intentionally):
-        - No session listing: KV store has no scan endpoint.
-          Production would use Redis SCAN or a secondary index.
-        - TTL via background job: sessions persist across service restarts
-          but cleanup only runs while service is live.
+    Session index:
+        A secondary index key "index:{agent_id}" stores the list of known
+        session_ids for that agent. Updated on session create and delete.
+        Uses the same optimistic concurrency pattern as session writes.
+        Index writes are best-effort — they never fail the parent operation.
     """
 
     MAX_RETRIES = 3
@@ -58,6 +59,90 @@ class MemoryService:
 
     def _key(self, agent_id: str, session_id: str) -> str:
         return f"mem:{agent_id}:{session_id}"
+
+    def _index_key(self, agent_id: str) -> str:
+        return f"index:{agent_id}"
+
+    async def _add_to_index(self, agent_id: str, session_id: str) -> None:
+        """
+        Add session_id to the agent's session index.
+        Uses optimistic concurrency — retries on conflict.
+        Best-effort: never raises, logs warning on failure.
+        """
+        key = self._index_key(agent_id)
+        for _ in range(self.MAX_RETRIES):
+            try:
+                existing, version = await self._kv.get(key)
+                if existing is None:
+                    sessions = []
+                    expected_version = 1
+                else:
+                    sessions = existing.get("sessions", [])
+                    expected_version = version + 1
+
+                if session_id in sessions:
+                    return
+
+                sessions.append(session_id)
+                new_version = await self._kv.put(key, {"agent_id": agent_id, "sessions": sessions})
+                if new_version == expected_version:
+                    return
+                await asyncio.sleep(self.RETRY_SLEEP)
+            except Exception:
+                logger.warning("Failed to add session %s to index for agent %s", session_id, agent_id, exc_info=True)
+                return
+
+    async def _remove_from_index(self, agent_id: str, session_id: str) -> None:
+        """
+        Remove session_id from the agent's session index.
+        Uses optimistic concurrency — retries on conflict.
+        Best-effort: never raises.
+        """
+        key = self._index_key(agent_id)
+        for _ in range(self.MAX_RETRIES):
+            try:
+                existing, version = await self._kv.get(key)
+                if existing is None:
+                    return
+                sessions = existing.get("sessions", [])
+                if session_id not in sessions:
+                    return
+                sessions = [s for s in sessions if s != session_id]
+                expected_version = version + 1
+                new_version = await self._kv.put(key, {"agent_id": agent_id, "sessions": sessions})
+                if new_version == expected_version:
+                    return
+                await asyncio.sleep(self.RETRY_SLEEP)
+            except Exception:
+                logger.warning("Failed to remove session %s from index for agent %s", session_id, agent_id, exc_info=True)
+                return
+
+    async def list_sessions(self, agent_id: str) -> list[dict]:
+        """
+        List all known sessions for an agent, with summary metadata.
+        Reads from the session index key, then fetches each session.
+        Sessions created before the index existed are not listed.
+        Returns list of dicts with session_id, message_count, created_at, updated_at, version.
+        """
+        key = self._index_key(agent_id)
+        existing, _ = await self._kv.get(key)
+        if existing is None:
+            return []
+
+        session_ids = existing.get("sessions", [])
+        summaries = []
+        for sid in session_ids:
+            session_key = self._key(agent_id, sid)
+            value, version = await self._kv.get(session_key)
+            if value is not None:
+                summaries.append({
+                    "session_id": sid,
+                    "message_count": value.get("message_count", 0),
+                    "created_at": value.get("created_at", 0),
+                    "updated_at": value.get("updated_at", 0),
+                    "version": version,
+                })
+        return summaries
 
     async def append_message(self, agent_id: str, session_id: str, role: str, content: str) -> dict:
         """
@@ -103,6 +188,9 @@ class MemoryService:
             if new_version == expected_version:
                 session["version"] = new_version
                 self._cleanup.register(key)
+
+                if existing is None:
+                    await self._add_to_index(agent_id, session_id)
 
                 try:
                     await self._stream.record(agent_id, "append", session_id, {
@@ -179,6 +267,7 @@ class MemoryService:
         deleted = await self._kv.delete(key)
 
         if deleted:
+            await self._remove_from_index(agent_id, session_id)
             try:
                 await self._stream.record(agent_id, "delete", session_id, {
                     "message_count": None,

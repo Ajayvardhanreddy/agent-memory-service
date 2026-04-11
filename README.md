@@ -27,6 +27,7 @@ This service is built on [distributed-kv-store](https://github.com/Ajayvardhanre
 | Method | Path | Description | Returns |
 |--------|------|-------------|---------|
 | `POST` | `/memory/{agent_id}/{session_id}/append` | Append a message to a session | `SessionResponse` |
+| `GET` | `/memory/{agent_id}/sessions` | List all sessions for an agent | `SessionListResponse` |
 | `GET` | `/memory/{agent_id}/{session_id}` | Get full session with all messages | `SessionResponse` |
 | `GET` | `/memory/{agent_id}/{session_id}/window?last_n=10` | Get last N messages | `WindowResponse` |
 | `DELETE` | `/memory/{agent_id}/{session_id}` | Delete a session | `{"message": "deleted"}` |
@@ -110,15 +111,15 @@ Events are stored in the KV store but indexed in memory (`dict[agent_id, list[kv
 
 The KV store has no TTL support and no scan endpoint. The cleanup job maintains a set of known session keys and periodically checks each one's `updated_at` timestamp. Sessions created before a service restart are not tracked until they are accessed again. **Production alternative:** Store session keys in a Redis SET or maintain a secondary index key in the KV store.
 
-### No session listing
+### Session index via secondary index key
 
-The KV store only supports exact key lookups — no range scans, no list operations. This means you cannot enumerate all sessions for an agent. Each session must be accessed by its known ID. **Production alternative:** Redis SCAN, a secondary index in DynamoDB, or a metadata table in Postgres.
+The KV store has no scan endpoint, so session listing is implemented with a secondary index key `index:{agent_id}` that holds the list of known session IDs for that agent. This key is updated on every session creation and deletion using the same optimistic concurrency pattern as session writes. **Production alternative:** Redis SET or a metadata table in Postgres for larger scale.
 
 ## Known Limitations
 
 | Limitation | Impact | Production Solution |
 |------------|--------|-------------------|
-| No session listing | Cannot enumerate sessions for an agent | Secondary index or Redis SCAN |
+| Index only tracks sessions created after first deploy | Sessions that existed before the index key was introduced are not listed | Backfill job, or use activity stream events to rebuild |
 | In-memory stream index | Empty after restart; old events not queryable | Redis sorted sets or TimescaleDB |
 | Registry-based TTL | Missed sessions from before restart | Redis SET or KV-stored index key |
 | Single-service deployment | No horizontal scaling of memory service | Stateless design already supports it — just add a load balancer |
