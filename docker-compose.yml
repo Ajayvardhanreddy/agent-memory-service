@@ -1,0 +1,17 @@
+version: "3.8"
+services:
+  memory-service:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - KV_NODE_URLS=http://host.docker.internal:8000,http://host.docker.internal:8001,http://host.docker.internal:8002
+      - SESSION_TTL_HOURS=24
+      - LOG_LEVEL=INFO
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
