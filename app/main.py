@@ -184,12 +184,14 @@ async def append_message(
     return result
 
 
-@app.get("/memory/{agent_id}/sessions", response_model=SessionListResponse)
+@app.get("/agents/{agent_id}/sessions", response_model=SessionListResponse)
 async def list_sessions(agent_id: str, request: Request):
     """
     List all sessions for an agent with summary metadata.
     Uses the KV-stored session index (index:{agent_id}).
     Only includes sessions created after this endpoint was first deployed.
+    Path is /agents/... (not /memory/...) to avoid FastAPI route ambiguity
+    with /memory/{agent_id}/{session_id}.
     """
     memory: MemoryService = request.app.state.memory
     summaries = await memory.list_sessions(agent_id)
@@ -286,7 +288,7 @@ async def root():
         "description": "Session memory and activity stream for AI agents",
         "endpoints": {
             "POST /memory/{agent_id}/{session_id}/append": "Append a message to a session",
-            "GET /memory/{agent_id}/sessions": "List all sessions for an agent",
+            "GET /agents/{agent_id}/sessions": "List all sessions for an agent",
             "GET /memory/{agent_id}/{session_id}": "Get full session",
             "GET /memory/{agent_id}/{session_id}/window?last_n=10": "Get last N messages",
             "DELETE /memory/{agent_id}/{session_id}": "Delete a session",
