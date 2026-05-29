@@ -12,7 +12,7 @@ Session memory and activity stream for AI agents, built on a [distributed KV sto
       │       GET  /memory/{agent}/{session}/window
       ▼
    ┌─────────────────────────────────────────────────────┐
-   │            Agent Memory Service  :8080              │
+   │            Agent Memory Service  :8081              │
    │                                                     │
    │  MemoryService          ActivityStream  CleanupJob  │
    │  ├─ append_message()    ├─ record()     ├─ register │
@@ -137,25 +137,25 @@ docker-compose up -d
 cd agent-memory-service
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --port 8080
+uvicorn app.main:app --port 8081
 ```
 
 **3. Quick test:**
 
 ```bash
 # Append a message
-curl -X POST http://localhost:8080/memory/agent1/session1/append \
+curl -X POST http://localhost:8081/memory/agent1/session1/append \
   -H "Content-Type: application/json" \
   -d '{"role": "user", "content": "Hello, I need help with my order."}'
 
 # List all sessions for an agent
-curl http://localhost:8080/memory/agent1/sessions
+curl http://localhost:8081/memory/agent1/sessions
 
 # Get sliding window (last 5 messages)
-curl "http://localhost:8080/memory/agent1/session1/window?last_n=5"
+curl "http://localhost:8081/memory/agent1/session1/window?last_n=5"
 
 # Check health
-curl http://localhost:8080/health
+curl http://localhost:8081/health
 ```
 
 ## Running the Demos

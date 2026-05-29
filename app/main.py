@@ -9,8 +9,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.cleanup import CleanupJob
+from app.embedder import Embedder, EmbedderUnavailableError
 from app.kv_client import KVClient, KVStoreUnavailableError
 from app.memory import MemoryService, SessionNotFoundError, VersionConflictError
+from app.postgres import PostgresClient
 from app.stream import ActivityStream
 
 logging.basicConfig(
@@ -49,6 +51,14 @@ class WindowResponse(BaseModel):
     messages: list[MessageModel]
     total_messages: int
     window_size: int
+
+
+class SemanticSearchResponse(BaseModel):
+    session_id: str
+    query: str
+    messages: list[MessageModel]
+    total_results: int
+    retrieval_mode: str = "semantic"
 
 
 class EventResponse(BaseModel):
@@ -103,7 +113,21 @@ async def lifespan(app: FastAPI):
     kv = KVClient(http_client, node_urls=[u.strip() for u in node_urls])
     stream = ActivityStream(kv)
     cleanup = CleanupJob(kv, ttl_hours=ttl_hours)
-    memory = MemoryService(kv, stream, cleanup)
+
+    db_url = os.getenv("DATABASE_URL")
+    openai_key = os.getenv("OPENAI_API_KEY")
+    pg: PostgresClient | None = None
+    embedder: Embedder | None = None
+
+    if db_url and openai_key:
+        pg = PostgresClient(db_url)
+        await pg.open()
+        embedder = Embedder(pg, openai_key)
+        logger.info("Semantic search enabled (pgvector + OpenAI)")
+    else:
+        logger.warning("DATABASE_URL or OPENAI_API_KEY not set — semantic search disabled")
+
+    memory = MemoryService(kv, stream, cleanup, embedder)
 
     app.state.memory = memory
     app.state.stream = stream
@@ -119,6 +143,8 @@ async def lifespan(app: FastAPI):
         await cleanup_task
     except asyncio.CancelledError:
         pass
+    if pg is not None:
+        await pg.close()
     await http_client.aclose()
     logger.info("Agent Memory Service shut down")
 
@@ -160,6 +186,14 @@ async def kv_unavailable_handler(request: Request, exc: KVStoreUnavailableError)
     return JSONResponse(
         status_code=503,
         content={"error": "kv_store_unavailable", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(EmbedderUnavailableError)
+async def embedder_unavailable_handler(request: Request, exc: EmbedderUnavailableError):
+    return JSONResponse(
+        status_code=503,
+        content={"error": "embedder_unavailable", "detail": str(exc)},
     )
 
 
@@ -221,6 +255,30 @@ async def get_window(
     """
     memory: MemoryService = request.app.state.memory
     return await memory.get_window(agent_id, session_id, last_n=last_n)
+
+
+@app.get("/memory/{agent_id}/{session_id}/semantic", response_model=SemanticSearchResponse)
+async def semantic_search(
+    agent_id: str,
+    session_id: str,
+    request: Request,
+    query: str,
+    top_k: int = 5,
+):
+    """
+    Return top-K messages most semantically similar to query.
+    Embeds the query via OpenAI, runs cosine similarity search in pgvector.
+    404 if semantic search is not configured (DATABASE_URL / OPENAI_API_KEY missing).
+    503 if OpenAI API is unavailable.
+    """
+    memory: MemoryService = request.app.state.memory
+    results = await memory.semantic_search(agent_id, session_id, query, top_k)
+    return {
+        "session_id": session_id,
+        "query": query,
+        "messages": results,
+        "total_results": len(results),
+    }
 
 
 @app.delete("/memory/{agent_id}/{session_id}")
@@ -291,6 +349,7 @@ async def root():
             "GET /agents/{agent_id}/sessions": "List all sessions for an agent",
             "GET /memory/{agent_id}/{session_id}": "Get full session",
             "GET /memory/{agent_id}/{session_id}/window?last_n=10": "Get last N messages",
+            "GET /memory/{agent_id}/{session_id}/semantic?query=...&top_k=5": "Semantic similarity search",
             "DELETE /memory/{agent_id}/{session_id}": "Delete a session",
             "GET /stream/{agent_id}?limit=50": "Get activity stream events",
             "GET /stream/{agent_id}/filter?action=append&limit=20": "Filter events by action",

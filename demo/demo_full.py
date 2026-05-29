@@ -15,11 +15,11 @@ Covers:
 
 Prerequisites:
   - KV cluster: cd distributed-kv-store && docker-compose up -d
-  - Memory service: uvicorn app.main:app --port 8080
+  - Memory service: uvicorn app.main:app --port 8081
 
 Usage:
   python demo/demo_full.py
-  python demo/demo_full.py --memory-url http://localhost:8080
+  python demo/demo_full.py --memory-url http://localhost:8081
 """
 
 import argparse
@@ -31,7 +31,7 @@ import time
 
 import httpx
 
-MEMORY_URL = "http://localhost:8080"
+MEMORY_URL = "http://localhost:8081"
 KV_CONTAINER_PREFIX = "distributed-kv-store"
 
 # ── Real-world conversation scenarios ────────────────────────────────────────
