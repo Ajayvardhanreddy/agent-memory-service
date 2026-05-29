@@ -11,12 +11,12 @@ What this proves:
 
 Prerequisites:
   - KV cluster running: cd distributed-kv-store && docker-compose up -d
-  - Memory service running: uvicorn app.main:app --port 8080
+  - Memory service running: uvicorn app.main:app --port 8081
   - Docker available for node kill/restart
 
 Usage:
   python demo/demo.py
-  python demo/demo.py --memory-url http://localhost:8080 --kv-container-prefix distributed-kv-store
+  python demo/demo.py --memory-url http://localhost:8081 --kv-container-prefix distributed-kv-store
 """
 
 import argparse
@@ -28,7 +28,7 @@ import time
 
 import httpx
 
-MEMORY_URL = "http://localhost:8080"
+MEMORY_URL = "http://localhost:8081"
 KV_CONTAINER_PREFIX = "distributed-kv-store"
 AGENT_ID = "support-agent"
 SESSION_ID = "user-123"

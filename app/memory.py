@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
+from typing import TYPE_CHECKING
 
 from app.kv_client import KVClient
 from app.stream import ActivityStream
 from app.cleanup import CleanupJob
+
+if TYPE_CHECKING:
+    from app.embedder import Embedder
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +58,17 @@ class MemoryService:
     MAX_RETRIES = 3
     RETRY_SLEEP = 0.05
 
-    def __init__(self, kv: KVClient, stream: ActivityStream, cleanup: CleanupJob):
+    def __init__(
+        self,
+        kv: KVClient,
+        stream: ActivityStream,
+        cleanup: CleanupJob,
+        embedder: Embedder | None = None,
+    ):
         self._kv = kv
         self._stream = stream
         self._cleanup = cleanup
+        self._embedder = embedder
 
     def _key(self, agent_id: str, session_id: str) -> str:
         return f"mem:{agent_id}:{session_id}"
@@ -201,6 +214,18 @@ class MemoryService:
                 except Exception:
                     logger.warning("Failed to record append event", exc_info=True)
 
+                if self._embedder is not None:
+                    message_index = session["message_count"] - 1
+                    try:
+                        await self._embedder.embed_and_store(
+                            agent_id, session_id, message_index, role, content, now
+                        )
+                    except Exception:
+                        logger.warning(
+                            "embed_and_store failed — semantic index may lag for %s/%s idx=%d",
+                            agent_id, session_id, message_index, exc_info=True,
+                        )
+
                 return session
 
             logger.warning(
@@ -257,6 +282,20 @@ class MemoryService:
             "total_messages": len(messages),
             "window_size": len(window),
         }
+
+    async def semantic_search(
+        self, agent_id: str, session_id: str, query: str, top_k: int = 5
+    ) -> list[dict]:
+        """
+        Return top-K messages most semantically similar to query.
+        Requires embedder to be configured (DATABASE_URL + OPENAI_API_KEY set).
+        Raises SessionNotFoundError if embedder is not configured.
+        """
+        if self._embedder is None:
+            raise SessionNotFoundError(
+                f"Semantic search not available — embedder not configured"
+            )
+        return await self._embedder.semantic_search(agent_id, session_id, query, top_k)
 
     async def delete_session(self, agent_id: str, session_id: str) -> bool:
         """
