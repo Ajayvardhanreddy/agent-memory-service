@@ -1,6 +1,6 @@
 # Agent Memory Service
 
-Session memory and activity stream for AI agents, built on a [distributed KV store](https://github.com/Ajayvardhanreddy/distributed-kv-store). Supports both sliding-window recency retrieval and embedding-based semantic similarity search via pgvector.
+Session memory and activity stream for AI agents, built on a [distributed KV store](https://github.com/Ajayvardhanreddy/distributed-kv-store). Supports both sliding-window recency retrieval and embedding-based semantic similarity search via pgvector. Powers the [Agent Execution Engine](https://github.com/Ajayvardhanreddy/agent-execution-engine) - the Layer 3 runtime that drives agent orchestration, tool execution, and observability.
 
 ## Architecture
 
@@ -42,10 +42,12 @@ Sliding-window retrieval (`last_n=10`) is fast and requires no external dependen
 
 Semantic search solves this by indexing every message as a vector on write. At query time, the query itself is embedded and the closest matching messages are returned by cosine similarity — regardless of when they were sent. The two modes are complementary:
 
-| Mode | How it works | When to use |
-|------|-------------|-------------|
-| `window(last_n=N)` | Returns the N most recent messages | Recent conversational context |
+
+| Mode                     | How it works                                           | When to use                                   |
+| ------------------------ | ------------------------------------------------------ | --------------------------------------------- |
+| `window(last_n=N)`       | Returns the N most recent messages                     | Recent conversational context                 |
 | `semantic(query, top_k)` | Returns top-K messages closest in meaning to the query | Finding relevant old context in long sessions |
+
 
 Layer 3 (agent-execution-engine) uses both in a hybrid `_load_memory()` call: `window(10)` for recency + `semantic(5)` for relevance, merged and deduplicated before building the LLM prompt.
 
@@ -166,18 +168,20 @@ This service is built on [distributed-kv-store](https://github.com/Ajayvardhanre
 
 ## API Reference
 
-| Method | Path | Description | Returns |
-|--------|------|-------------|---------|
-| `POST` | `/memory/{agent_id}/{session_id}/append` | Append a message to a session | `SessionResponse` |
-| `GET` | `/agents/{agent_id}/sessions` | List all sessions for an agent | `SessionListResponse` |
-| `GET` | `/memory/{agent_id}/{session_id}` | Get full session with all messages | `SessionResponse` |
-| `GET` | `/memory/{agent_id}/{session_id}/window?last_n=10` | Get last N messages (recency) | `WindowResponse` |
-| `GET` | `/memory/{agent_id}/{session_id}/semantic?query=...&top_k=5` | Top-K semantically similar messages | `SemanticSearchResponse` |
-| `DELETE` | `/memory/{agent_id}/{session_id}` | Delete a session | `{"message": "deleted"}` |
-| `GET` | `/stream/{agent_id}?limit=50` | Get activity stream events | `StreamResponse` |
-| `GET` | `/stream/{agent_id}/filter?action=append&limit=20` | Filter events by action type | `StreamResponse` |
-| `GET` | `/health` | Service and KV cluster health | Health status |
-| `GET` | `/` | Service info and endpoint list | Service metadata |
+
+| Method   | Path                                                         | Description                         | Returns                  |
+| -------- | ------------------------------------------------------------ | ----------------------------------- | ------------------------ |
+| `POST`   | `/memory/{agent_id}/{session_id}/append`                     | Append a message to a session       | `SessionResponse`        |
+| `GET`    | `/agents/{agent_id}/sessions`                                | List all sessions for an agent      | `SessionListResponse`    |
+| `GET`    | `/memory/{agent_id}/{session_id}`                            | Get full session with all messages  | `SessionResponse`        |
+| `GET`    | `/memory/{agent_id}/{session_id}/window?last_n=10`           | Get last N messages (recency)       | `WindowResponse`         |
+| `GET`    | `/memory/{agent_id}/{session_id}/semantic?query=...&top_k=5` | Top-K semantically similar messages | `SemanticSearchResponse` |
+| `DELETE` | `/memory/{agent_id}/{session_id}`                            | Delete a session                    | `{"message": "deleted"}` |
+| `GET`    | `/stream/{agent_id}?limit=50`                                | Get activity stream events          | `StreamResponse`         |
+| `GET`    | `/stream/{agent_id}/filter?action=append&limit=20`           | Filter events by action type        | `StreamResponse`         |
+| `GET`    | `/health`                                                    | Service and KV cluster health       | Health status            |
+| `GET`    | `/`                                                          | Service info and endpoint list      | Service metadata         |
+
 
 ## Running Locally
 
@@ -278,12 +282,14 @@ pytest tests/ -v --tb=short
 
 33 unit tests across 4 test files. All external dependencies (KV store, Postgres, OpenAI) are mocked — tests run offline with no infrastructure.
 
-| File | What it covers |
-|------|---------------|
-| `test_kv_client.py` | Round-robin, failover, GET/PUT/DELETE |
-| `test_memory.py` | Optimistic concurrency, session CRUD, version conflict retries |
-| `test_stream.py` | Event recording, ordering, filtering |
-| `test_embedder.py` | Embed + store, semantic search, best-effort failure handling |
+
+| File                | What it covers                                                 |
+| ------------------- | -------------------------------------------------------------- |
+| `test_kv_client.py` | Round-robin, failover, GET/PUT/DELETE                          |
+| `test_memory.py`    | Optimistic concurrency, session CRUD, version conflict retries |
+| `test_stream.py`    | Event recording, ordering, filtering                           |
+| `test_embedder.py`  | Embed + store, semantic search, best-effort failure handling   |
+
 
 ## Key Design Decisions
 
@@ -315,11 +321,14 @@ The KV store has no TTL support and no scan endpoint. The cleanup job maintains 
 
 ## Known Limitations
 
-| Limitation | Impact | Production Solution |
-|------------|--------|-------------------|
-| Semantic index is eventually consistent | Messages invisible to `/semantic` until embedding completes | Retry queue (e.g. Celery) for failed embeddings |
-| Index only tracks sessions created after deploy | Pre-existing sessions not listed until accessed | Backfill job, or rebuild from activity stream |
-| In-memory stream index | Empty after restart; old events not queryable | Redis sorted sets or TimescaleDB |
-| Registry-based TTL | Misses sessions from before last restart | Redis SET or KV-stored index key |
-| Single-service deployment | No horizontal scaling of memory service | Stateless design already supports it — add a load balancer |
-| No authentication | Open API endpoints | API key middleware or OAuth2 |
+
+| Limitation                                      | Impact                                                      | Production Solution                                        |
+| ----------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- |
+| Semantic index is eventually consistent         | Messages invisible to `/semantic` until embedding completes | Retry queue (e.g. Celery) for failed embeddings            |
+| Index only tracks sessions created after deploy | Pre-existing sessions not listed until accessed             | Backfill job, or rebuild from activity stream              |
+| In-memory stream index                          | Empty after restart; old events not queryable               | Redis sorted sets or TimescaleDB                           |
+| Registry-based TTL                              | Misses sessions from before last restart                    | Redis SET or KV-stored index key                           |
+| Single-service deployment                       | No horizontal scaling of memory service                     | Stateless design already supports it — add a load balancer |
+| No authentication                               | Open API endpoints                                          | API key middleware or OAuth2                               |
+
+
